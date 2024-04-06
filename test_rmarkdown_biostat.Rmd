@@ -559,16 +559,23 @@ originals_data <- read_csv2("data/raw/some_data.csv") %>%
 
 ```{r}
 
-originals_data %>%
-  rename(`Группа` = V0_GRP) %>%
-  get_combined_table("Группа", significant_digits = 2) %>%
-  base_flextable() %>%
-  merge_v(c("Переменная")) %>%
-  merge_v("Переменная", target = c("p-value", "p-value (между группам скорр., fdr)", "Значимо различающиеся группы")) %>%
-  color(i = ~ `p-value (между группам скорр., fdr)` %>% str_remove("<") %>% str_remove("\\(ANOVA\\)") %>% str_remove("\\(Kruskal test\\)") %>% str_remove("\\(t\\)")  %>% str_remove("\\(w\\)") %>% str_replace(",", "\\.") %>% as.numeric() %>% `>=`(0.05), color = "darkgray")
+#originals_data %>%
+#  rename(`Группа` = V0_GRP) %>%
+#  get_combined_table("Группа", significant_digits = 2) %>%
+#  base_flextable() %>%
+#  merge_v(c("Переменная")) %>%
+#  merge_v("Переменная", target = c("p-value", "p-value (между группам скорр., fdr)", "Значимо различающиеся группы")) %>%
+#  color(i = ~ `p-value (между группам скорр., fdr)` %>% str_remove("<") %>% str_remove("\\(ANOVA\\)") %>% #str_remove("\\(Kruskal test\\)") %>% str_remove("\\(t\\)")  %>% str_remove("\\(w\\)") %>% str_replace(",", "\\.") %>% #as.numeric() %>% `>=`(0.05), color = "darkgray")
   
 ```
 
+```{r}
+
+iris %>%
+  head() %>%
+  base_flextable()
+
+```
 
 
 
