@@ -1,0 +1,555 @@
+---
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, error = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(coin)
+library(flextable)
+library(readxl)
+library(lubridate)
+library(stringi)
+
+library(DescTools)
+
+library(rcompanion)
+library(effectsize)
+
+library(lubridate)
+library(survival)
+library(survminer)
+
+library(flextable)
+
+library(ggpubr)
+library(rstatix)
+
+library(RColorBrewer)
+library(coin)
+
+library(cluster)
+library(factoextra)
+library(recipes)
+library(plotly)
+
+library(uwot)
+library(broom)
+
+library(Boruta)
+library(embed)
+library(themis)
+
+options(scipen=999)
+
+COUNTER <- 1
+
+# ADDITIONAL FUNCTIONS
+
+get_scf <- function(creatinine, a, b, c, age) {
+  
+  a * (creatinine / b) * c * 0.993 * age
+  
+}
+
+pretty_p <- function(x) {
+
+  map_chr(x, function(x) ifelse(is.na(x) | is.nan(x), return("Не определено"), ifelse(x < 0.001, return("<0,001"), return(round(x, 3) %>% formatC(format = "f", digits = 3, decimal.mark = ",")))))
+
+}
+
+##################################################
+  
+make_correct_percentage <- function(x, y) {
+  
+  if (y == 0) {
+    
+    paste0(0, "%") %>% return()
+    
+  } else {
+    
+    paste0(round(x / y, 3)*100, "%") %>% return()
+    
+  }
+  
+}
+
+##################################################
+
+code2meaning <- function(original_names, code, meaning, underscore = FALSE) {
+  
+  if (underscore == TRUE) {
+    
+    code <- code %>% paste0("_")
+    meaning <- meaning %>% paste0("__")
+    
+  }
+  
+  original_names %>% stri_replace_all_regex(code, meaning, vectorize_all = FALSE)
+  
+}
+
+##################################################
+
+base_flextable <- function(subtable) {
+  
+  subtable %>%
+    flextable() %>%
+    theme_box() %>%
+    width(width = 1) %>%
+    align(align = "center", part = "all") %>%
+    fontsize(size = 9)
+  
+}
+
+##################################################
+
+check_number <- function(x) {
+  
+  if (is.na(x)) {
+    
+    return(FALSE)
+    
+  }
+  
+  return(is.character(x) & str_detect(x, ","))
+  
+}
+
+# BASE FUNCTIONS
+
+##################################################
+
+add_sarcopenia_diagnosis <- function(subdata) {
+  
+  subdata %>%
+    mutate(ID = row_number()) %>%
+    left_join(subdata %>% get_sarcopenia_diagnosis(), by = "ID")
+  
+}
+
+##################################################
+
+number_recode <- function(number) {
+  
+  if (is.na(number)) {
+    
+    return(NA)
+    
+  }
+  
+  if (str_detect(number, "^<")) {
+    
+    number %>% str_remove("<") %>% str_replace(",", ".") %>% as.numeric() %>% `-`(1)
+    
+  } else {
+    
+    number %>% str_extract("^\\d+,\\d+(?= )|^\\d+,\\d+|^\\d+") %>% str_replace(",", ".") %>% as.numeric()
+    
+  }
+  
+}
+
+############################################################
+
+make_stats_num_table_short <- function(data, vars, group_var, significant_digits = 1) {
+  
+  make_stats_subtable <- function(data, group_var, variable, significant_digits = 1) {
+    
+    ################################################################################
+    ############################ CORRECT STATISTICS ################################
+    ################################################################################
+    
+    correct_shapiro_test <- function(variable) {
+        
+      if (var(variable, na.rm = TRUE) == 0 | sum(!is.na(variable)) <= 3) {
+      
+        return(NaN)
+      
+      } else {
+      
+        return(shapiro.test(variable)$p.value)
+    
+      }
+      
+    }
+    
+    correct_sd <- function(x, significant_digits = 2) {
+        
+      if (sd(x, na.rm = TRUE) < 0.001 | is.na(sd(x, na.rm = TRUE)) | sum(!is.na(x)) < 3) {
+    
+        return("Н/П*")
+    
+      } else {
+    
+        sd(x, na.rm = TRUE) %>% round(significant_digits) %>% as.character()
+    
+      }
+    
+    }
+    
+    correct_mean <- function(x, significant_digits) ifelse(sum(!is.na(x)) == 0, "Н/П*", mean(x, na.rm = TRUE) %>% round(significant_digits) %>% as.character())
+    
+    correct_median <- function(x, significant_digits) ifelse(sum(!is.na(x)) == 0, "Н/П*", median(x, na.rm = TRUE) %>% round(significant_digits) %>% as.character())
+    
+    correct_quantiles <- function(x, significant_digits) ifelse(sum(!is.na(x)) == 0, "Н/П*", paste0(quantile(x, 0.25, na.rm = TRUE) %>% round(significant_digits), " - ", quantile(x, 0.75, na.rm = TRUE) %>% round(significant_digits)))
+    
+    correct_min_max <- function(x, significant_digits) ifelse(sum(!is.na(x)) == 0, "Н/П*", paste0(round(min(x, na.rm = TRUE), significant_digits), " - ", round(max(x, na.rm = TRUE), significant_digits)))
+    
+    ################################################################################
+      
+    data %>%
+      select(all_of(c(group_var, variable))) %>%
+      group_by(.data[[group_var]]) %>%
+      summarise(method = "Shapiro-test", p.value = correct_shapiro_test(.data[[variable]])) -> shapiro_data
+    
+    statistics_gauss <- list(
+    
+      `_N` = ~as.character(sum(!is.na(.x))),
+      `_min - max` = ~correct_min_max(.x, significant_digits),
+      `_M (SD)` = ~paste0(correct_mean(.x, significant_digits), " (", correct_sd(.x, significant_digits), ")"),
+      `_Me (Q1 - Q3)` = ~paste0(correct_median(.x, significant_digits), " (", correct_quantiles(.x, significant_digits), ")")
+    
+    )
+    
+    statistics_non_gauss <- list(
+      
+      `_N` = ~as.character(sum(!is.na(.x))),
+      `_min - max` = ~correct_min_max(.x, significant_digits),
+      `_M (SD)` = ~paste0(correct_mean(.x, significant_digits), " (", correct_sd(.x, significant_digits), ")"),
+      `_Me (Q1 - Q3)` = ~paste0(correct_median(.x, significant_digits), " (", correct_quantiles(.x, significant_digits), ")")
+      
+    )
+    
+    make_anova_tukey <- function(data, group_var, variable) {
+      
+      tibble(`Группы` = "Все группы",
+             `Множественное сравнение, p.value` = anova_test(formula(paste0("`", variable, "`~`", group_var, "`")), data = data, type = 2) %>% 
+               get_anova_table() %>% .$p %>% pretty_p() %>% str_c(" (ANOVA)"),
+             `p-value for correction` = anova_test(formula(paste0("`", variable, "`~`", group_var, "`")), data = data, type = 2) %>% 
+               get_anova_table() %>% .$p) -> anova_table
+    
+      tukey_hsd(data, formula(paste0("`", variable, "`~`", group_var, "`"))) %>% 
+        select(group1, group2, p.adj) %>% 
+        mutate(across(c(p.adj), function(x) pretty_p(x) %>% str_c(" (t)"))) %>% 
+        unite("Группы", group1, group2, sep = " vs. ") %>% 
+        rename(`Попарные сравнения, p.value` = p.adj) -> compare_means_table
+      
+      anova_table %>%
+        bind_rows(compare_means_table)
+      
+    }
+      
+    make_kruskal_dunn <- function(data, group_var, variable) {
+        
+      tibble(`Группы` = "Все группы",
+             `Множественное сравнение, p.value` = kruskal.test(formula(paste0("`", variable, "`~`", group_var, "`")), data = data) %>% 
+               .$p.value %>% pretty_p() %>% str_c(" (Kruskal test)"),
+             `p-value for correction` = kruskal.test(formula(paste0("`", variable, "`~`", group_var, "`")), data = data) %>% 
+               .$p.value) -> kruskal_table
+      
+      dunn_test(data, formula(paste0("`", variable, "`~`", group_var, "`"))) %>% 
+        select(group1, group2, p.adj) %>% 
+        mutate(across(c(p.adj), function(x) pretty_p(x) %>% str_c(" (d)"))) %>% 
+        unite("Группы", group1, group2, sep = " vs. ") %>% 
+        rename(`Попарные сравнения, p.value` = p.adj) -> compare_means_table
+      
+      kruskal_table %>%
+        bind_rows(compare_means_table)
+        
+    }
+    
+    if (all(shapiro_data$p.value >= 0.05) & !any(is.nan(shapiro_data$p.value))) {
+      
+      statistics <- statistics_gauss
+      
+      comparison_variable_multiple <- ifelse(length(unique(data[[group_var]])) == 1, "Н/П*", make_anova_tukey(data %>% rename(dependent_variable := variable), group_var, "dependent_variable") %>% 
+                                      filter(`Группы` == "Все группы") %>% pull(`Множественное сравнение, p.value`))
+      
+      variable_for_holm_multiple <- ifelse(length(unique(data[[group_var]])) == 1, "Н/П*", make_anova_tukey(data %>% rename(dependent_variable := variable), group_var, "dependent_variable") %>% 
+                                      filter(`Группы` == "Все группы") %>% pull(`p-value for correction`))
+      
+      comparison_variable_two <- ifelse(length(unique(data[[group_var]])) == 2, t.test(as.formula(paste0("`", variable, "`~`", group_var, "`")), data)$p.value %>% pretty_p() %>% paste0(" (t)"), "Н/П*")
+      
+      variable_for_holm_two <- ifelse(length(unique(data[[group_var]])) == 2, t.test(as.formula(paste0("`", variable, "`~`", group_var, "`")), data)$p.value, "Н/П*")
+      
+      pairwise_variable <- ifelse(length(unique(data[[group_var]])) == 1, "Н/П*", make_anova_tukey(data %>% rename(dependent_variable := variable), group_var, "dependent_variable") %>% 
+                                    filter(`Попарные сравнения, p.value` %>% str_extract("^0\\.\\d{3}") %>% str_replace(",", "\\.") %>% as.numeric() %>% `<`(0.05)) %>% pull(`Группы`) %>% str_c(collapse = "\n"))
+      
+    } else {
+      
+      statistics <- statistics_non_gauss
+  
+      comparison_variable_multiple <- ifelse(length(unique(data[[group_var]])) == 1, "Н/П*", make_kruskal_dunn(data %>% rename(dependent_variable := variable), group_var, "dependent_variable") %>% 
+                                      filter(`Группы` == "Все группы") %>% pull(`Множественное сравнение, p.value`))
+      
+      variable_for_holm_multiple <- ifelse(length(unique(data[[group_var]])) == 1, "Н/П*", make_kruskal_dunn(data %>% rename(dependent_variable := variable), group_var, "dependent_variable") %>% 
+                                      filter(`Группы` == "Все группы") %>% pull(`p-value for correction`))
+      
+      comparison_variable_two <- ifelse(length(unique(data[[group_var]])) == 2, wilcox.test(as.formula(paste0("`", variable, "`~`", group_var, "`")), data)$p.value %>% pretty_p() %>% paste0(" (w)"), "Н/П*")
+      
+      variable_for_holm_two <- ifelse(length(unique(data[[group_var]])) == 2, wilcox.test(as.formula(paste0("`", variable, "`~`", group_var, "`")), data)$p.value, "Н/П*")
+      
+      pairwise_variable <- ifelse(length(unique(data[[group_var]])) == 1, "Н/П*", make_kruskal_dunn(data %>% rename(dependent_variable := variable), group_var, "dependent_variable") %>% 
+                                    filter(`Попарные сравнения, p.value` %>% str_remove("<") %>% str_extract("^0\\.\\d{3}") %>% str_replace(",", "\\.") %>% as.numeric() %>% `<`(0.05)) %>% pull(`Группы`) %>% str_c(collapse = "\n"))
+      
+    }
+    
+    data %>%
+      group_by(.data[[group_var]]) %>%
+      summarise(across(variable, statistics), .groups = "keep") %>%
+      mutate(across(everything(), as.character)) %>%
+      pivot_longer(-all_of(c(group_var))) %>%
+      ungroup() %>%
+      separate(name, into = c("Переменная", "Параметр"), "__") %>%
+      pivot_wider(names_from = group_var, values_from = value) %>%
+      mutate(`p-value` = ifelse(length(unique(data[[group_var]])) == 2, comparison_variable_two, comparison_variable_multiple),
+             `Значимо различающиеся группы` = pairwise_variable,
+             `p-value for correction` = ifelse(length(unique(data[[group_var]])) == 2, variable_for_holm_two, variable_for_holm_multiple))
+  
+  }
+  
+  data %>%
+    rename(`Группа` = group_var) %>%
+    count(`Группа`) %>%
+    mutate(new_levels = paste0(`Группа`, " (N = ", n, ")")) %>%
+    select(old_levels = `Группа`, new_levels) -> groups_amount
+  
+  data %>%
+    mutate(across(group_var, function(x) x %>% as.character() %>% stri_replace_all_regex(groups_amount$old_levels, groups_amount$new_levels,   vectorize_all = FALSE) %>% as.factor())) -> data_recoded
+  
+  vars %>%
+    set_names() %>%
+    map(function(variable) make_stats_subtable(data_recoded, group_var, variable, significant_digits)) %>%
+    bind_rows() %>%
+    mutate(across(!c(`Переменная`, `Параметр`, `Значимо различающиеся группы`, `p-value for correction`), function(x) x %>% str_replace_all("\\.", ","))) -> all_variable_data
+  
+  if (length(unique(data[[group_var]])) == 2) {
+    
+    all_variable_data %>%
+      select(!`Значимо различающиеся группы`) %>% return()
+    
+  } else {
+    
+    all_variable_data %>% return()
+    
+  }
+    
+}
+
+##############################################################################################################
+
+make_short_cat_table <- function(data, group_var, vars) {
+  
+  correct_test <- function(subtable, test) {
+    
+    set.seed(333)
+  
+    if (sum(rowSums(subtable) > 0) >= 2 & sum(colSums(subtable) > 0) >= 2) {
+  
+      subtable %>%
+        test(simulate.p.value = TRUE, B = 50000) %>%
+        .$p.value %>%
+        pretty_p()
+  
+    } else {
+  
+      return("Н/П*")
+  
+    }
+  
+  }
+    
+  make_cat_test <- function(matrix_data) {
+  
+    if (any(matrix_data < 5)) {
+  
+      matrix_data %>%
+        correct_test(fisher.test) %>%
+        paste0(" (f)") %>%
+        return()
+  
+    } else {
+  
+      matrix_data %>%
+        correct_test(chisq.test) %>%
+        paste0(" (\U03C7^2)") %>%
+        return()
+  
+    }
+  
+  }
+  
+  #######################################################
+  
+  correct_test_holm <- function(subtable, test) {
+    
+    set.seed(333)
+  
+    if (sum(rowSums(subtable) > 0) >= 2 & sum(colSums(subtable) > 0) >= 2) {
+  
+      subtable %>%
+        test(simulate.p.value = TRUE, B = 50000) %>%
+        .$p.value
+  
+    } else {
+  
+      return(NA)
+  
+    }
+  
+  }
+    
+  make_cat_test_holm <- function(matrix_data) {
+  
+    if (any(matrix_data < 5)) {
+  
+      matrix_data %>%
+        correct_test_holm(fisher.test) %>%
+        return()
+  
+    } else {
+  
+      matrix_data %>%
+        correct_test_holm(chisq.test) %>%
+        return()
+  
+    }
+  
+  }
+  
+  ######################################################  
+  
+  data %>%
+    rename(`Группа` = group_var) %>%
+    count(`Группа`) %>%
+    mutate(new_levels = paste0(`Группа`, " (N = ", n, ")")) %>%
+    select(old_levels = `Группа`, new_levels) -> groups_amount
+  
+  data %>%
+    mutate(across(group_var, function(x) x %>% as.character() %>% stri_replace_all_regex(groups_amount$old_levels, groups_amount$new_levels,   vectorize_all = FALSE) %>% as.factor())) -> data_recoded
+  
+  make_cat_subtable <- function(data, group_var, variable) {
+    
+    data %>%
+      filter(.data[[variable]] != "Нет данных") %>%
+      mutate(across(all_of(variable), function(x) x %>% droplevels())) -> modified_data
+    
+    modified_data %>%
+      count(.data[[group_var]], .data[[variable]], .drop = FALSE) %>%
+      group_by(.data[[group_var]]) %>%
+      mutate(group_proc = (n / sum(n)) %>% round(4) %>% `*`(100) %>% paste0(., "%")) %>%
+      ungroup() %>%
+      pivot_longer(cols = variable) %>%
+      rename(`Переменная` = name) %>%
+      mutate(`Количество` = paste0(n, " (", group_proc, ")")) %>%
+      select(`Переменная`, group_var, `Значение` = value, `Количество`) %>%
+      pivot_wider(names_from = group_var, values_from = `Количество`) %>%
+      mutate(`p-value` = table(modified_data[[group_var]], modified_data[[variable]]) %>% make_cat_test(),
+             `p-value for correction` = table(modified_data[[group_var]], modified_data[[variable]]) %>% make_cat_test_holm(),
+             `Переменная` = str_c(`Переменная`, " (N = ", nrow(modified_data), ")"))
+    
+  }
+  
+  vars %>%
+      map(function(variable) make_cat_subtable(data_recoded, group_var, variable)) %>%
+      bind_rows() %>%
+    mutate(`p-value` = ifelse(str_detect(`p-value`, "Н/П*"), "Н/П*", `p-value`)) %>%
+  mutate(across(!c(`Переменная`, `Значение`, `p-value for correction`), function(x) x %>% str_replace("\\.", ","))) %>%
+    mutate(across(!`p-value for correction`, function(x) x %>% str_replace("NaN", "0")))
+  
+}
+
+##############################################################################################################
+
+get_combined_table <- function(interim_data, group_var, significant_digits = 2) {
+  
+  interim_data %>%
+    select(group_var, where(function(x) (all(grepl("\\d+\\.\\d+|\\d+", na.omit(x)))) & all(!str_detect(na.omit(x), "[:alpha:]")) & !all(x %in% c(1, 2)) & 
+                             all(!str_detect(na.omit(x), "\\d{1,2}[:\\-]\\d{1,2}")))) -> interim_num
+  
+  interim_data %>%
+    select(group_var, !where(function(x) (all(grepl("\\d+\\.\\d+|\\d+", na.omit(x)))) & !all(x %in% c(1, 2))) | where(function(x) (any(str_detect(na.omit(x), "[:alpha:]")))) | 
+             where(function(x) any(str_detect(na.omit(x), "\\d{1,2}[:\\-]\\d{1,2}")))) -> interim_cat
+  
+  ################################ NUM TABLE ###############################################
+  
+
+  
+  if((interim_num %>% select(!`Группа`) %>% ncol()) == 0) {
+    
+    tibble() -> num_table
+    
+  } else {
+    
+    data <- interim_num
+    vars <- data %>% select(!group_var) %>% names()
+    make_stats_num_table_short(data, vars, group_var, significant_digits = 2) -> num_table    
+    
+  }
+  
+  ################################ CAT TABLE ###############################################
+  
+  if((interim_cat %>% select(!`Группа`) %>% ncol()) == 0) {
+    
+    tibble() -> cat_table
+    
+  } else {
+
+    data <- interim_cat
+    vars <- data %>% select(!group_var) %>% names()
+    make_short_cat_table(data, group_var, vars) %>% rename(`Параметр` = `Значение`) -> cat_table
+    
+  }
+
+  ################################# COMBINE ################################################
+  
+  num_table %>%
+    bind_rows(cat_table) -> combined_table_interim
+  
+  combined_table_interim %>%
+    select(`Переменная`, `p-value for correction`) %>%
+    distinct(`Переменная`, .keep_all = TRUE) %>%
+    mutate(across(`p-value for correction`, function(x) x %>% p.adjust(method = "fdr") %>% pretty_p())) -> adjusted_p_values
+  
+  combined_table_interim %>%
+    select(!`p-value for correction`) %>%
+    left_join(adjusted_p_values, by = "Переменная") %>%
+    rename(`p-value (между группам скорр., fdr)` = `p-value for correction`) %>%
+    relocate(`p-value (между группам скорр., fdr)`, .after = `p-value`) -> interim_combined_table
+  
+  if (length(unique(interim_data %>% pull(group_var))) == 1) {
+    
+    interim_combined_table %>% select(!c(`p-value`, `p-value (между группам скорр., fdr)`, contains("Значимо различающиеся группы"))) %>% 
+      #filter(`Значение` != "Нет") %>% 
+      return()
+    
+  } else {
+    
+    interim_combined_table %>% 
+      #filter(`Значение` != "Нет") %>% 
+      return()
+    
+  }
+  
+}
+
+##############################################################################################################
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
