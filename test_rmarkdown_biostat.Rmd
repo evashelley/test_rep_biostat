@@ -1,5 +1,7 @@
 ---
 output: 
+  html_document:
+    keep_md: true
   word_document:
     toc: yes
     reference_docx: "example.docx"
@@ -566,51 +568,6 @@ originals_data %>%
   color(i = ~ `p-value (между группам скорр., fdr)` %>% str_remove("<") %>% str_remove("\\(ANOVA\\)") %>% str_remove("\\(Kruskal test\\)") %>% str_remove("\\(t\\)")  %>% str_remove("\\(w\\)") %>% str_replace(",", "\\.") %>% as.numeric() %>% `>=`(0.05), color = "darkgray")
   
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
